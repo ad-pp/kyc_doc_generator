@@ -563,7 +563,7 @@ function validateDataEntry() {
 // ============================================================
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  AlignmentType, WidthType, BorderStyle, ShadingType, UnderlineType, PageBreak, Header,
+  AlignmentType, WidthType, BorderStyle, ShadingType, UnderlineType, PageBreak, Header, TableLayoutType,
 } = docxLib;
 
 const bdr = { style: BorderStyle.SINGLE, size: 1, color: "000000" };
@@ -589,6 +589,20 @@ function hCell(text, w) {
   return new TableCell({ borders: bdrs, shading: { fill: "D9D9D9", type: ShadingType.CLEAR }, margins: { top: 60, bottom: 60, left: 100, right: 100 },
     width: { size: w, type: WidthType.DXA }, children: [new Paragraph({ children: [th(text)], spacing: { after: 0 } })] });
 }
+// The 9-column BO table cannot fit the document's 11pt body text across A4:
+// the widest unbreakable token in each column measures ~180mm of text before
+// padding, against 178mm of available width. It therefore uses 9pt with
+// tighter cell margins, and the column widths below are derived from those
+// measured token widths so nothing breaks mid-word (a split PAN or DOB is not
+// acceptable on a KYC document).
+const BO_MARGINS = { top: 60, bottom: 60, left: 60, right: 60 };
+const boH = (text, w) => new TableCell({ borders: bdrs, shading: { fill: "D9D9D9", type: ShadingType.CLEAR }, margins: BO_MARGINS,
+  width: { size: w, type: WidthType.DXA }, children: [new Paragraph({ children: [new TextRun({ text: text || "", font: "Times New Roman", size: 18, bold: true })], spacing: { after: 0 } })] });
+const boC = (text, w) => new TableCell({ borders: bdrs, margins: BO_MARGINS, width: { size: w, type: WidthType.DXA },
+  children: [new Paragraph({ children: [t(text, { size: 18 })], spacing: { after: 0 } })] });
+const boU = (text, w) => new TableCell({ borders: bdrs, margins: BO_MARGINS, width: { size: w, type: WidthType.DXA },
+  children: [new Paragraph({ children: [u(text, { size: 18 })], spacing: { after: 0 } })] });
+
 function sigTable(members) {
   const list = members && members.length ? members : [{ name: "", designation: "" }];
   const colW = Math.floor(9360 / list.length);
@@ -693,7 +707,11 @@ async function buildPartnershipResolution(d) {
 async function buildPartnershipBO(d) {
   const hasLH = d.includeLetterhead && d.firmName;
   const principalCell = d.principalSame === "same" ? "\u2611 Same" : "\u2610 Same   OR " ;
-  const boCols = [400, 1100, 1800, 680, 680, 980, 980, 680, 780];
+  // Must sum to the table's declared width (10080). These previously summed to
+  // 8080, and Word and docx-preview resolve that contradiction differently,
+  // which pushed the table past the right margin of the surrounding text.
+  // Scaled proportionally, so relative column widths are unchanged.
+  const boCols = [505, 1394, 1418, 1219, 1196, 1361, 1071, 1100, 816];
   const threshold = d.isRegistered ? 10 : 15;
   const boRows = d.boCategory === "cat1"
     ? d.partners.filter((m) => Number(m.share) > threshold)
@@ -719,16 +737,16 @@ async function buildPartnershipBO(d) {
       new Paragraph({ children: [t((d.boCategory === "cat2" ? "\u2611" : "\u2610") + " Category 2", { bold: true }), t(" - We hereby declare that no natural person is identified as per category 1 (above). (Mention the details of the natural person(s) holding the position of senior management official in the entity.)")], spacing: { after: 80 } }),
       new Paragraph({ children: [t((d.pepStatusBO === "yes" ? "\u2611" : "\u2610") + " Our personnel(s), partner(s), director(s), officer(s), or our family member(s) or our close associate(s) and beneficial owners, is a Politically Exposed Person. (\u201cPolitically Exposed Persons\u201d (PEPs) are individuals who are or have been entrusted with prominent public functions by a foreign country, including Heads of States/Governments, senior politicians, senior government or judicial or military officers, senior executives of state-owned corporations and important political party officials.)")], spacing: { after: 100 } }),
       p([t("The details of beneficial owner(s) is/are as follows:")]),
-      new Table({ width: { size: 10080, type: WidthType.DXA }, columnWidths: boCols, rows: [
+      new Table({ width: { size: 10080, type: WidthType.DXA }, layout: TableLayoutType.FIXED, columnWidths: boCols, rows: [
         new TableRow({ tableHeader: true, cantSplit: true, children: [
-          hCell("S.N.", boCols[0]), hCell("Name", boCols[1]), hCell("Residential Address and PIN code", boCols[2]),
-          hCell("Designation", boCols[3]), hCell("DOB", boCols[4]), hCell("Proof of identity", boCols[5]),
-          hCell("Proof of Address", boCols[6]), hCell("Nationality", boCols[7]), hCell("% of interest", boCols[8]),
+          boH("S.N.", boCols[0]), boH("Name", boCols[1]), boH("Residential Address and PIN code", boCols[2]),
+          boH("Designation", boCols[3]), boH("DOB", boCols[4]), boH("Proof of identity", boCols[5]),
+          boH("Proof of Address", boCols[6]), boH("Nationality", boCols[7]), boH("% of interest", boCols[8]),
         ]}),
         ...boRows.map((m, i) => new TableRow({ cantSplit: true, children: [
-          cell(String(i + 1), boCols[0]), ucell(m.name, boCols[1]), ucell(m.address, boCols[2]),
-          ucell(m.designation, boCols[3]), ucell(m.dob, boCols[4]), ucell(m.pan, boCols[5]),
-          ucell(m.poa + " " + m.poaNumDisplay, boCols[6]), ucell(m.nationality, boCols[7]), ucell(m.share + "%", boCols[8]),
+          boC(String(i + 1), boCols[0]), boU(m.name, boCols[1]), boU(m.address, boCols[2]),
+          boU(m.designation, boCols[3]), boU(m.dob, boCols[4]), boU(m.pan, boCols[5]),
+          boU(m.poa + " " + m.poaNumDisplay, boCols[6]), boU(m.nationality, boCols[7]), boU(m.share + "%", boCols[8]),
         ]})),
       ]}),
       p([]),
@@ -819,7 +837,11 @@ async function buildCompanyBO(d) {
   const source = d.boCategory === "cat1"
     ? d.partners.filter((m) => Number(m.share) > 10)
     : d.partners.filter((m) => m.isAS);
-  const boCols = [400, 1100, 1800, 680, 680, 980, 980, 680, 780];
+  // Must sum to the table's declared width (10080). These previously summed to
+  // 8080, and Word and docx-preview resolve that contradiction differently,
+  // which pushed the table past the right margin of the surrounding text.
+  // Scaled proportionally, so relative column widths are unchanged.
+  const boCols = [505, 1394, 1418, 1219, 1196, 1361, 1071, 1100, 816];
   const doc = new Document({ sections: [{
     properties: { page: pageSetup(hasLH) },
     headers: hasLH ? { default: buildLetterheadHeader(d) } : undefined,
@@ -845,16 +867,16 @@ async function buildCompanyBO(d) {
       new Paragraph({ children: [t((d.boCategory === "cat1" ? "\u2611" : "\u2610") + " Category 1", { bold: true }), t(" - Following persons/entities own 10% or more interest or possess the right to control management/policy decisions.")], spacing: { after: 80 } }),
       new Paragraph({ children: [t((d.boCategory === "cat2" ? "\u2611" : "\u2610") + " Category 2", { bold: true }), t(" - No natural person is identified as per Category 1 above.")], spacing: { after: 160 } }),
       p([t("The details of beneficial owner(s) is/are as follows:")]),
-      new Table({ width: { size: 10080, type: WidthType.DXA }, columnWidths: boCols, rows: [
+      new Table({ width: { size: 10080, type: WidthType.DXA }, layout: TableLayoutType.FIXED, columnWidths: boCols, rows: [
         new TableRow({ tableHeader: true, cantSplit: true, children: [
-          hCell("S.N.", boCols[0]), hCell("Name", boCols[1]), hCell("Residential Address and PIN code", boCols[2]),
-          hCell("Designation", boCols[3]), hCell("DOB", boCols[4]), hCell("Proof of identity", boCols[5]),
-          hCell("Proof of Address", boCols[6]), hCell("Nationality", boCols[7]), hCell("% of interest", boCols[8]),
+          boH("S.N.", boCols[0]), boH("Name", boCols[1]), boH("Residential Address and PIN code", boCols[2]),
+          boH("Designation", boCols[3]), boH("DOB", boCols[4]), boH("Proof of identity", boCols[5]),
+          boH("Proof of Address", boCols[6]), boH("Nationality", boCols[7]), boH("% of interest", boCols[8]),
         ]}),
         ...source.map((m, i) => new TableRow({ cantSplit: true, children: [
-          cell(String(i + 1), boCols[0]), ucell(m.name, boCols[1]), ucell(m.address, boCols[2]),
-          ucell(m.designation, boCols[3]), ucell(m.dob, boCols[4]), ucell(m.pan, boCols[5]),
-          ucell(m.poa + " " + m.poaNumDisplay, boCols[6]), ucell(m.nationality, boCols[7]), ucell(m.share + "%", boCols[8]),
+          boC(String(i + 1), boCols[0]), boU(m.name, boCols[1]), boU(m.address, boCols[2]),
+          boU(m.designation, boCols[3]), boU(m.dob, boCols[4]), boU(m.pan, boCols[5]),
+          boU(m.poa + " " + m.poaNumDisplay, boCols[6]), boU(m.nationality, boCols[7]), boU(m.share + "%", boCols[8]),
         ]})),
       ]}),
       p([]),
