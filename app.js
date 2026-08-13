@@ -1079,47 +1079,106 @@ async function downloadPdf(kind) {
     const pages = document.querySelectorAll("#previewBody section.docx");
     if (!pages.length) throw new Error("No preview pages found");
     const pdfName = previewArtifact.filename.replace(/\.docx$/i, ".pdf");
-    const common = { margin: 0, image: { type: "jpeg", quality: 0.99 }, html2canvas: { scale: 2.2, useCORS: true, backgroundColor: "#ffffff", logging: false }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } };
-    const canvases = [];
+
+    // A4 at 96dpi. html2pdf's capture overlay is position:fixed/top:0/bottom:0
+    // with overflow:hidden, so windowHeight must exceed a full page or the
+    // bottom of every page is silently clipped on short viewports.
+    const PAGE_H_PX = Math.ceil(297 / 25.4 * 96);
+
+    // html2pdf's toCanvas() forwards these straight to html2canvas but sets no
+    // scroll options of its own, so html2canvas defaults scrollX/scrollY to the
+    // live page scroll. It derives the crop origin from getBoundingClientRect()
+    // + scroll, while the cloned document it actually rasterises is reset to
+    // scroll 0. Any non-zero scroll therefore offsets every page - which is why
+    // pages came out shifted down and clipped, or entirely blank. Pinning both
+    // to 0 makes the crop origin and the clone agree.
+    //
+    // windowWidth MUST stay equal to the real viewport width: html2pdf centres
+    // its capture container inside a left:-100000px overlay, so a synthetic
+    // width shifts the clone horizontally relative to the crop origin. Only
+    // windowHeight is enlarged, which is safe because the container is top
+    // aligned and so never centred vertically.
+    const common = {
+      margin: 0,
+      image: { type: "jpeg", quality: 0.99 },
+      html2canvas: {
+        scale: 2.2, useCORS: true, backgroundColor: "#ffffff", logging: false,
+        scrollX: 0, scrollY: 0,
+        windowWidth: window.innerWidth,
+        windowHeight: Math.max(window.innerHeight, PAGE_H_PX + 48),
+        imageTimeout: 20000,
+      },
+      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+    };
+
+    // Belt and braces: neutralise scroll for the duration of the capture.
+    const scrollX0 = window.pageXOffset, scrollY0 = window.pageYOffset;
+    window.scrollTo(0, 0);
+
     const exportRoot = document.createElement("div");
     exportRoot.className = "pdf-export-root";
     document.body.appendChild(exportRoot);
-    for (const page of pages) {
-      const clone = page.cloneNode(true);
-      clone.style.position = "relative";
-      clone.style.top = "0";
-      clone.style.left = "0";
-      clone.style.margin = "0";
-      clone.style.transform = "none";
-      exportRoot.appendChild(clone);
-      canvases.push(await window.html2pdf().set(common).from(clone).toCanvas().get("canvas"));
-      clone.remove();
-    }
-    const firstClone = pages[0].cloneNode(true);
-    firstClone.style.cssText += ";position:relative;top:0;left:0;margin:0;transform:none";
-    exportRoot.appendChild(firstClone);
-    const firstWorker = window.html2pdf().set({ ...common, filename: pdfName }).from(firstClone).toPdf();
-    const pdf = await firstWorker.get("pdf");
-    // Replace html2pdf's first-page image with a page-fitted render, then add
-    // one image per DOCX page so no table can be split by automatic pagination.
-    for (let index = 0; index < canvases.length; index++) {
-      const canvas = canvases[index];
-      const image = canvas.toDataURL("image/jpeg", 0.99);
-      const ratioHeight = 210 * canvas.height / canvas.width;
-      const drawHeight = Math.min(297, ratioHeight);
-      const drawWidth = drawHeight === 297 ? 297 * canvas.width / canvas.height : 210;
-      const x = (210 - drawWidth) / 2;
-      if (index === 0) {
-        pdf.deletePage(1);
-        pdf.addPage("a4", "portrait");
-      } else {
-        pdf.addPage("a4", "portrait");
+
+    // html2pdf deep-clones the source node into its own container, so any rule
+    // scoped to .pdf-export-root is dropped before rasterising. Page geometry
+    // must be inline on the node itself to survive that clone.
+    //
+    // Width is pinned so every page rasterises at an identical scale. Height is
+    // NOT pinned: docx-preview renders section.docx as display:flex/column, so
+    // a fixed height makes the children flex-shrink and overlap each other
+    // whenever content exceeds one page. min-height only pads short pages out
+    // to a full sheet.
+    const PAGE_CSS = ";position:relative;top:0;left:0;margin:0;transform:none;box-shadow:none;" +
+      "background:#fff;width:210mm;min-width:210mm;max-width:210mm;" +
+      "height:auto;min-height:297mm;overflow:hidden";
+
+    const canvases = [];
+    try {
+      for (const page of pages) {
+        const clone = page.cloneNode(true);
+        clone.style.cssText += PAGE_CSS;
+        exportRoot.appendChild(clone);
+        canvases.push(await window.html2pdf().set(common).from(clone).toCanvas().get("canvas"));
+        clone.remove();
       }
-      pdf.addImage(image, "JPEG", x, 0, drawWidth, drawHeight);
+
+      // Cheap throwaway render purely to obtain a configured jsPDF instance.
+      const seed = document.createElement("div");
+      seed.style.cssText = "width:1px;height:1px;background:#fff";
+      exportRoot.appendChild(seed);
+      const pdf = await window.html2pdf().set({ ...common, filename: pdfName }).from(seed).toPdf().get("pdf");
+      seed.remove();
+      pdf.deletePage(1);
+
+      // One captured page per DOCX page, anchored top-left at exactly A4 width.
+      // Never rescale to fit and never centre: doing either is what made pages
+      // drift. docx-preview does not auto-paginate, so a section can be taller
+      // than a sheet; such a page is continued onto further sheets by offsetting
+      // the same image upward, which preserves scale and alignment exactly and
+      // loses no content.
+      let continued = 0;
+      for (const canvas of canvases) {
+        if (!canvas.width || !canvas.height) throw new Error("page captured with zero size");
+        const image = canvas.toDataURL("image/jpeg", 0.99);
+        const drawHeight = 210 * canvas.height / canvas.width;
+        const sheets = Math.max(1, Math.ceil(drawHeight / 297 - 0.01));
+        if (sheets > 1) continued++;
+        for (let sheet = 0; sheet < sheets; sheet++) {
+          pdf.addPage("a4", "portrait");
+          pdf.addImage(image, "JPEG", 0, -sheet * 297, 210, drawHeight);
+        }
+      }
+      if (pdf.getNumberOfPages() < canvases.length) {
+        throw new Error("expected at least " + canvases.length + " pages, produced " + pdf.getNumberOfPages());
+      }
+      await pdf.save(pdfName);
+      if (continued) {
+        console.warn("PDF export: " + continued + " page(s) were longer than A4 and continued onto extra sheets.");
+      }
+    } finally {
+      exportRoot.remove();
+      window.scrollTo(scrollX0, scrollY0);
     }
-    if (pdf.getNumberOfPages() > canvases.length) pdf.deletePage(1);
-    await pdf.save(pdfName);
-    exportRoot.remove();
     logToSheet();
     showToast("PDF download started", "ok");
   } catch (error) {
