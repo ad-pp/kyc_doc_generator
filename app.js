@@ -619,7 +619,11 @@ function buildLetterheadHeader(lh) {
   return new Header({ children: [lhTable, hrPara] });
 }
 function pageSetup(hasLH) {
-  return { size: { width: 12240, height: 15840 }, margin: { top: hasLH ? 1150 : 900, right: 900, bottom: 650, left: 900 } };
+  // A4 (11906 x 16838 twips). Printing is done on A4, and the PDF export
+  // renders A4 sheets, so the DOCX must match or the two disagree. Side
+  // margins of 900 leave 10106 twips of content width, which still clears the
+  // widest table in any document (10080).
+  return { size: { width: 11906, height: 16838 }, margin: { top: hasLH ? 1150 : 900, right: 900, bottom: 650, left: 900 } };
 }
 // ---- PARTNERSHIP: RESOLUTION ----
 async function buildPartnershipResolution(d) {
