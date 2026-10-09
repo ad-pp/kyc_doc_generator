@@ -991,7 +991,7 @@ async function buildMDF(d) {
         p([t((d.mdfEntityNature === "na" ? "\u2611" : "\u2610") + " NA")]),
       ] : []),
       new Paragraph({ children: [
-        t("No personnel, director, officer, any family member or close associate of the Merchant and its beneficial owners, is a Politically Exposed Person (PEP): "),
+        t((isACE ? "Personnel" : "No personnel") + ", director, officer, any family member or close associate of the Merchant and its beneficial owners, is a Politically Exposed Person (PEP): "),
         t((d.mdfPepStatus === "yes" ? "YES \u2611" : "YES \u2610") + "     " + (d.mdfPepStatus === "no" ? "NO \u2611" : "NO \u2610")),
       ], spacing: { after: 160 } }),
       new Paragraph({ children: [t("I, having PAN number "), u(d.mdfAuthPan), t(", hereby declare that the above facts and information are true, complete and correct to the best of my knowledge. I understand and agree that in case it is found that the above-mentioned facts and information are incorrect, I will be personally held liable for the same.")], spacing: { after: 300 } }),
